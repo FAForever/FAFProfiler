@@ -379,10 +379,13 @@ local bCallback = nil
 
 function PrintBPInfo(level)
     WARN(' ')
-    WARN('--- Callers ---')
+    WARN('Event Tick: '..GetGameTick())
+    WARN(' ')
+    WARN('--- Call Stack ---')
     WARN('+3: '..repr(debug.getinfo(level + 3, 'Snl')))
     WARN('+2: '..repr(debug.getinfo(level + 2, 'Snl')))
     WARN('+1: '..repr(debug.getinfo(level + 1, 'Snl')))
+    WARN('+0: '..repr(debug.getinfo(level + 0, 'Snl')))
     local Info = debug.getinfo(level, 'f')
     WARN(' ')
     WARN('--- Locals ---')
@@ -416,7 +419,7 @@ function PrintBPInfo(level)
 end
 
 local function BreakpointHook(Action, LineNum)
-    if bBPs[getfenv(2)] ~= LineNum then return end
+    if bBPs[getfenv(2)][LineNum] == nil then return end
     local Status, Stop = pcall(bCallback, 4)
     if not Status then
         BreakpointToggle()
@@ -453,5 +456,31 @@ function BreakpointToggle(BPs, PassCnt, Callback)
         RunTime = true
         WARN('FAFProfiler: Breakpoint - Run')
         debug.sethook(BreakpointHook, 'l')
+    end
+end
+
+local bData = nil
+
+local function CustomBPHook(Action, LineNum)
+    if bCallback(bData, Action, LineNum) then
+      CustomBPToggle()
+    end
+end
+
+function CustomBPToggle(Callback, Data)
+    if RunTime then
+        debug.sethook()
+        WARN('FAFProfiler: CustomBP - Stop')
+        RunTime = nil
+    else
+        bCallback = Callback
+        if type(bCallback) ~= 'function' then
+            WARN('bad argument #1 (not function)')
+            return
+        end
+        bData = Data
+        RunTime = true
+        WARN('FAFProfiler: CustomBP - Run')
+        debug.sethook(CustomBPHook, 'l')
     end
 end

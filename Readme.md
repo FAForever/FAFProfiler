@@ -25,12 +25,15 @@ TableProfiler(Table)
 BreakpointToggle(BPs, PassCnt, Callback)
     Sets breakpoint. When reached calls a callback.
     
-    BPs is {[Environment] = LineNum, ...}
+    BPs is {[Environment] = {[LineNum] = true, ...}, ...}
     PassCnt is number callback calls(default 1, 0 is infinity)
     Callback is function without input params(default PrintBPInfo)
     
 Example:
-    SimLua BreakpointToggle({[import('/lua/sim/score.lua')] = 168}, 1, DoCallback)
+    SimLua BreakpointToggle({[import('/lua/sim/score.lua')] = {[168] = true}}, 1, DoCallback)
     
 PrintBPInfo(level)
-    Used as a callback for a breakpoint. Prints caller info, locals and upvalues.
+    Used as a callback for a breakpoint. Prints tick, callstack, locals and upvalues.
+
+CustomBPToggle(Callback, Data)
+    Sets breakpoint. When reached calls a callback. Data is passed to the Callback.
