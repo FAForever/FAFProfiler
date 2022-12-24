@@ -22,15 +22,26 @@ local function GetFunc(Info)
     return Func
 end
 
+local getinfo = debug.getinfo
+local allocatedsize = debug.allocatedsize
+local GetTimeForProfile = GetTimeForProfile
+
+local GetGameTick
+if not pcall(function() GetGameTick = GameTick end) then
+    GetGameTick = _G.GetGameTick
+end
+
+local InitTime = GetTimeForProfile(0)
+
 local function FuncHook(Action)
-    local CurTime = GetSystemTimeSecondsOnlyForProfileUse()
+    local CurTime = GetTimeForProfile(RunTime)
     if SkipEvent then
         SkipEvent = false
         return
     end
-    local Info = debug.getinfo(2, 'Sfn')
+    local Info = getinfo(2, 'Sfn')
     local Func = GetFunc(Info)
-    local pInfo = debug.getinfo(3, 'Sfn')
+    local pInfo = getinfo(3, 'Sfn')
     local pFunc = CFunc
     if pInfo then pFunc = GetFunc(pInfo) end
     if Action == 'call' then
@@ -64,14 +75,14 @@ local function FuncHook(Action)
         if Info.what == 'C' then CFunc = nil end
         if (not pInfo) and (not CFunc) then CurTime = nil end
     end
-    if CurTime then CurTime = GetSystemTimeSecondsOnlyForProfileUse() end
+    if CurTime then CurTime = GetTimeForProfile(RunTime) end
     EventTime = CurTime
 end
 
 function FuncProfilerToggle()
     if RunTime then
         debug.sethook()
-        RunTime = GetSystemTimeSecondsOnlyForProfileUse() - RunTime
+        RunTime = GetTimeForProfile(RunTime)
         WARN(string.format('FAFProfiler: Functions Profiler - Stop (Duration: %0.1f, GameTime: %0.1f)', RunTime, GetGameTimeSeconds()))
         WARN('Functions: '..table.getsize(Funcs))
         local Keys = table.keys(Funcs, function(a,b) return Funcs[a].Time > Funcs[b].Time end)
@@ -79,10 +90,10 @@ function FuncProfilerToggle()
             local Func = Funcs[k]
             if Func.Info.what == 'C' then
                 WARN(string.format('Time: %0.6f, Cnt: %d, What: %s', Func.Time, Func.Cnt, Func.Info.what))
-                WARN('Name: '..repr(Func.Info.func, 0, 0))
+                WARN('Name: '..repru(Func.Info.func, 0, 0))
                 for k,v in Func.Calls do
                     if v.what == 'C' then
-                        WARN('Call: '..repr(v.func, 0, 0)..', C')
+                        WARN('Call: '..repru(v.func, 0, 0)..', C')
                     else
                         WARN('Call: '..(v.name or '')..', '..v.linedefined..', '..v.source)
                     end
@@ -101,8 +112,8 @@ function FuncProfilerToggle()
         CFunc = nil
         EventTime = nil
         SkipEvent = false
-        RunTime = GetSystemTimeSecondsOnlyForProfileUse()
-        WARN(string.format('FAFProfiler: Functions Profiler - Run (RealTime: %0.1f, GameTime: %0.1f)', RunTime, GetGameTimeSeconds()))
+        RunTime = GetTimeForProfile(0)
+        WARN(string.format('FAFProfiler: Functions Profiler - Run (RealTime: %0.1f, GameTime: %0.1f)', RunTime - InitTime, GetGameTimeSeconds()))
         debug.sethook(FuncHook, 'cr')
     end
 end
@@ -118,7 +129,7 @@ local TSuspend = nil
 local TResume = nil
 
 local function ThreadHook(Action)
-    local Info = debug.getinfo(2, 'Sfn')
+    local Info = getinfo(2, 'Sfn')
     if Action == 'call' then
         local Domen = nil
         if Yielding[Info.func] ~= nil then
@@ -127,11 +138,11 @@ local function ThreadHook(Action)
             end
             local Depth = 4
             while true do
-                Info = debug.getinfo(Depth, 'Sn')
+                Info = getinfo(Depth, 'Sn')
                 if not Info then break end
                 Depth = Depth + 1
             end
-            Info = debug.getinfo(Depth - 1, 'Sn')
+            Info = getinfo(Depth - 1, 'Sn')
             local Func = TFuncs[GetFuncID(Info)]
             if Func then
                 if Depth > 4 then
@@ -144,7 +155,7 @@ local function ThreadHook(Action)
         elseif Info.func == ForkThread then
             local Depth = 3
             while true do
-                Info = debug.getinfo(Depth, 'Sn')
+                Info = getinfo(Depth, 'Sn')
                 if Info.name ~= 'ForkThread' then break end
                 Depth = Depth + 1
             end
@@ -153,7 +164,7 @@ local function ThreadHook(Action)
         elseif Info.func == KillThread then
             local Depth = 3
             while true do
-                Info = debug.getinfo(Depth, 'Sn')
+                Info = getinfo(Depth, 'Sn')
                 if Info.name ~= 'KillThread' then break end
                 Depth = Depth + 1
             end
@@ -161,7 +172,7 @@ local function ThreadHook(Action)
             TSumKills = TSumKills + 1
         elseif Info.func == ResumeThread then
             TResume = TResume + 1
-        elseif not debug.getinfo(3, 'f') then
+        elseif not getinfo(3, 'f') then
             local Status, Thread = pcall(CurrentThread)
             if Status then Domen = TFuncs else Domen = ECalls end
         else return end
@@ -170,14 +181,14 @@ local function ThreadHook(Action)
         if not Func then
             if Info.what == 'C' then
                 Info.linedefined = ''
-                Info.name = repr(Info.func, 0, 0)
+                Info.name = repru(Info.func, 0, 0)
                 Info.source = 'C'
             end
             Func = {Cnt = 0, Ends = 0, RootYield = 0, Yield = 0, LineDefined = Info.linedefined, Name = Info.name or '', Source = Info.source}
             Domen[FuncID] = Func
         end
         Func.Cnt = Func.Cnt + 1
-    elseif not debug.getinfo(3, 'f') then
+    elseif not getinfo(3, 'f') then
         local Status, Thread = pcall(CurrentThread)
         if Status then
             TSumEnds = TSumEnds + 1
@@ -200,7 +211,7 @@ end
 function ThreadProfilerToggle()
     if RunTime then
         debug.sethook()
-        RunTime = GetSystemTimeSecondsOnlyForProfileUse() - RunTime
+        RunTime = GetTimeForProfile(RunTime)
         WARN(string.format('FAFProfiler: Threads Profiler - Stop (Duration: %0.1f, GameTime: %0.1f)', RunTime, GetGameTimeSeconds()))
         WARN('Forks: '..FSumForks..', Kills: '..TSumKills..', Ends: '..TSumEnds..', Suspend: '..TSuspend..', Resume: '..TResume)
         WARN('Fork points: '..table.getsize(TForks))
@@ -231,29 +242,32 @@ function ThreadProfilerToggle()
         TSumEnds = 0
         TSuspend = 0
         TResume = 0
-        RunTime = GetSystemTimeSecondsOnlyForProfileUse()
-        WARN(string.format('FAFProfiler: Threads Profiler - Run (RealTime: %0.1f, GameTime: %0.1f)', RunTime, GetGameTimeSeconds()))
+        RunTime = GetTimeForProfile(0)
+        WARN(string.format('FAFProfiler: Threads Profiler - Run (RealTime: %0.1f, GameTime: %0.1f)', RunTime - InitTime, GetGameTimeSeconds()))
         debug.sethook(ThreadHook, 'cr')
     end
 end
 
 local function DeepSize(Table, BackRefs)
-    if (type(Table) ~= 'table') or (BackRefs[Table]) then return 0 end
+    if (type(Table) ~= 'table') or (BackRefs[Table]) then return 0, 0 end
     BackRefs[Table] = true
-    local Size = 0
+    local Vals = 0
+    local Bytes = allocatedsize(Table)
     for _,v in Table do
-        Size = Size + 1 + DeepSize(v, BackRefs)
+        Vals2, Bytes2 = DeepSize(v, BackRefs)
+        Vals = Vals + 1 + Vals2
+        Bytes = Bytes + Bytes2
     end
-    return Size
+    return Vals, Bytes
 end
 
 local function PrintTables(Tables)
-    WARN('Deep Size - Name - Source')
-    local Keys = table.keys(Tables, function(a,b) return Tables[a].Size > Tables[b].Size end)
+    WARN('Deep Values - Bytes - Name - Source')
+    local Keys = table.keys(Tables, function(a,b) return Tables[a].Vals > Tables[b].Vals end)
     for i,k in Keys do
         local Table = Tables[k]
         if i > 1000 then break end
-        WARN(Table.Size..' - '..Table.Name..' - '..Table.Source)
+        WARN(Table.Vals..' - '..Table.Bytes..' - '..Table.Name..' - '..Table.Source)
     end
 end
 
@@ -264,7 +278,8 @@ function TableProfiler(Table)
     BackRefs[Table] = nil
     for k,v in Table do
         if (type(v) ~= 'table') or (BackRefs[v]) then continue end
-        Tables[v] = {Size = DeepSize(v, BackRefs), Name = k, Source = ''}
+        local Vals, Bytes = DeepSize(v, BackRefs)
+        Tables[v] = {Vals = Vals, Bytes = Bytes, Name = k, Source = ''}
     end
     PrintTables(Tables)
 end
@@ -276,14 +291,17 @@ function TablesProfiler()
     local BackRefs = {}
     for k,v in _G do
         if (type(v) ~= 'table') or (BackRefs[v]) then continue end
-        Tables[v] = {Size = DeepSize(v, BackRefs), Name = k, Source = '_G'}
+        local Vals, Bytes = DeepSize(v, BackRefs)
+        Tables[v] = {Vals = Vals, Bytes = Bytes, Name = k, Source = '_G'}
     end
-    local Size = 0
+    local Vals = 0
+    local Bytes = 0
     for _,t in Tables do
-        Size = Size + t.Size
+        Vals = Vals + t.Vals
+        Bytes = Bytes + t.Bytes
     end
     WARN(' ')
-    WARN('Connectivity: '..table.getsize(Tables)..', Tables: '..table.getsize(BackRefs)..', Sum size: '..Size)
+    WARN('Connectivity: '..table.getsize(Tables)..', Tables: '..table.getsize(BackRefs)..', Sum size: '..Vals..', Sum bytes: '..Bytes)
     PrintTables(Tables)
     WARN(' ')
     Tables = {}
@@ -292,7 +310,8 @@ function TablesProfiler()
         BackRefs[m] = true
         for k,v in m do
             if (type(v) ~= 'table') or (Tables[v]) then continue end
-            Tables[v] = {Size = DeepSize(v, BackRefs), Name = k, Source = m.__moduleinfo.name}
+            local Vals, Bytes = DeepSize(v, BackRefs)
+            Tables[v] = {Vals = Vals, Bytes = Bytes, Name = k, Source = m.__moduleinfo.name}
         end
     end
     BackRefs[__modules] = nil
@@ -301,7 +320,8 @@ function TablesProfiler()
     end
     for k,v in _G do
         if (type(v) ~= 'table') or (Tables[v]) or (v == _G) then continue end
-        Tables[v] = {Size = DeepSize(v, BackRefs), Name = k, Source = '_G'}
+        local Vals, Bytes = DeepSize(v, BackRefs)
+        Tables[v] = {Vals = Vals, Bytes = Bytes, Name = k, Source = '_G'}
     end
     WARN('Roots: '..table.getsize(Tables))
     PrintTables(Tables)
@@ -312,37 +332,35 @@ local Line = nil
 local LineTime = nil
 
 local function LineHook(Action, LineNum)
-    local CurTime = GetSystemTimeSecondsOnlyForProfileUse()
+    local CurTime = GetTimeForProfile(RunTime)
     local CurLine = nil
     if Action == 'line' then
-        local Info = debug.getinfo(2, 'Sn')
+        local Info = getinfo(2, 'Sn')
         local CurLineID = Info.source..LineNum
         CurLine = Lines[CurLineID]
         if not CurLine then
-            CurLine = {Cnt = 0, Time = 0, Shift = 0, Num = LineNum, Name = Info.name or '', Source = Info.source}
+            CurLine = {Cnt = 0, Time = 0, Num = LineNum, Name = Info.name or '', Source = Info.source}
             Lines[CurLineID] = CurLine
         end
     end
     if Line then
         Line.Cnt = Line.Cnt + 1
         Line.Time = Line.Time + CurTime - LineTime
-        Line.Shift = Line.Shift + CurTime - GetSystemTimeSecondsOnlyForProfileUse()
     end
     Line = CurLine
-    LineTime = CurTime
+    LineTime = GetTimeForProfile(RunTime)
 end
 
 function LineProfilerToggle()
     if RunTime then
         debug.sethook()
-        RunTime = GetSystemTimeSecondsOnlyForProfileUse() - RunTime
+        RunTime = GetTimeForProfile(RunTime)
         WARN(string.format('FAFProfiler: Lines Profiler - Stop (Duration: %0.1f, GameTime: %0.1f)', RunTime, GetGameTimeSeconds()))
-        local LUATime = 0
+        local SumTime = 0
         for _,l in Lines do
-            LUATime = LUATime + l.Time
-            l.Time = l.Time - l.Shift
+            SumTime = SumTime + l.Time
         end
-        WARN('Found lines: '..table.getsize(Lines)..', LUA Time: '..LUATime)
+        WARN(string.format('Found lines: %d, Sum time: %0.6f',table.getsize(Lines), SumTime))
         WARN('SumTime - CallCnt - LineNum - FuncName - Source')
         local Keys = table.keys(Lines, function(a,b) return Lines[a].Time > Lines[b].Time end)
         for i,k in Keys do
@@ -354,8 +372,8 @@ function LineProfilerToggle()
     else
         Lines = {}
         Line = nil
-        RunTime = GetSystemTimeSecondsOnlyForProfileUse()
-        WARN(string.format('FAFProfiler: Lines Profiler - Run (RealTime: %0.1f, GameTime: %0.1f)', RunTime, GetGameTimeSeconds()))
+        RunTime = GetTimeForProfile(0)
+        WARN(string.format('FAFProfiler: Lines Profiler - Run (RealTime: %0.1f, GameTime: %0.1f)', RunTime - InitTime, GetGameTimeSeconds()))
         debug.sethook(LineHook, 'rl')
     end
 end
@@ -369,11 +387,11 @@ function PrintBPInfo(level)
     WARN('Event Tick: '..GetGameTick())
     WARN(' ')
     WARN('--- Call Stack ---')
-    WARN('+3: '..repr(debug.getinfo(level + 3, 'Snl')))
-    WARN('+2: '..repr(debug.getinfo(level + 2, 'Snl')))
-    WARN('+1: '..repr(debug.getinfo(level + 1, 'Snl')))
-    WARN('+0: '..repr(debug.getinfo(level + 0, 'Snl')))
-    local Info = debug.getinfo(level, 'f')
+    WARN('+3: '..repru(getinfo(level + 3, 'Snl')))
+    WARN('+2: '..repru(getinfo(level + 2, 'Snl')))
+    WARN('+1: '..repru(getinfo(level + 1, 'Snl')))
+    WARN('+0: '..repru(getinfo(level + 0, 'Snl')))
+    local Info = getinfo(level, 'f')
     WARN(' ')
     WARN('--- Locals ---')
     local i = 1
@@ -381,7 +399,7 @@ function PrintBPInfo(level)
         local n, v = debug.getlocal(level, i)
         if not n then break end
         if type(v) == 'cfunction' then
-            v = 'cfunction: '..repr(v, 0, 0)
+            v = 'cfunction: '..repru(v, 0, 0)
         elseif type(v) == 'table' then
             v = tostring(v)..', Size: '..table.getsize(v)
         end
@@ -395,7 +413,7 @@ function PrintBPInfo(level)
         local n, v = debug.getupvalue(Info.func, i)
         if not n then break end
         if type(v) == 'cfunction' then
-            v = 'cfunction: '..repr(v, 0, 0)
+            v = 'cfunction: '..repru(v, 0, 0)
         elseif type(v) == 'table' then
             v = tostring(v)..', Size: '..table.getsize(v)
         end
