@@ -26,9 +26,11 @@ local getinfo = debug.getinfo
 local allocatedsize = debug.allocatedsize
 local GetTimeForProfile = GetTimeForProfile
 
+local LStateName = 'UI'
 local GetGameTick
 if not pcall(function() GetGameTick = GameTick end) then
     GetGameTick = _G.GetGameTick
+    LStateName = 'Sim'
 end
 
 local InitTime = GetTimeForProfile(0)
@@ -113,7 +115,7 @@ function FuncProfilerToggle()
         EventTime = nil
         SkipEvent = false
         RunTime = GetTimeForProfile(0)
-        WARN(string.format('FAFProfiler: Functions Profiler - Run (RealTime: %0.1f, GameTime: %0.1f)', RunTime - InitTime, GetGameTimeSeconds()))
+        WARN(string.format('FAFProfiler: '..LStateName..' Functions Profiler - Run (RealTime: %0.1f, GameTime: %0.1f)', RunTime - InitTime, GetGameTimeSeconds()))
         debug.sethook(FuncHook, 'cr')
     end
 end
@@ -243,88 +245,135 @@ function ThreadProfilerToggle()
         TSuspend = 0
         TResume = 0
         RunTime = GetTimeForProfile(0)
-        WARN(string.format('FAFProfiler: Threads Profiler - Run (RealTime: %0.1f, GameTime: %0.1f)', RunTime - InitTime, GetGameTimeSeconds()))
+        WARN(string.format('FAFProfiler: '..LStateName..' Threads Profiler - Run (RealTime: %0.1f, GameTime: %0.1f)', RunTime - InitTime, GetGameTimeSeconds()))
         debug.sethook(ThreadHook, 'cr')
     end
 end
 
-local function DeepSize(Table, BackRefs)
-    if (type(Table) ~= 'table') or (BackRefs[Table]) then return 0, 0 end
-    BackRefs[Table] = true
-    local Vals = 0
-    local Bytes = allocatedsize(Table)
-    for _,v in Table do
-        Vals2, Bytes2 = DeepSize(v, BackRefs)
-        Vals = Vals + 1 + Vals2
-        Bytes = Bytes + Bytes2
+local function DeepSizeTab(t, seen)
+    if seen[t] then return 0, 0, 0 end
+    seen[t] = true
+    local bytes, allocs, vals = allocatedsize(t), 1, 0
+    for k, v in t do
+        vals = vals + 2
+        if not seen[k] then
+            if type(k) == 'table' then
+                local bytes2, allocs2, vals2 = DeepSizeTab(k, seen)
+                bytes, allocs, vals = bytes + bytes2, allocs + allocs2, vals + vals2
+            else
+                local bytes2 = allocatedsize(k)
+                bytes = bytes + bytes2
+                if bytes2 > 0 then
+                    allocs = allocs + 1
+                    seen[k] = true
+                end
+            end
+        end
+        if not seen[v] then
+            if type(v) == 'table' then
+                local bytes2, allocs2, vals2 = DeepSizeTab(v, seen)
+                bytes, allocs, vals = bytes + bytes2, allocs + allocs2, vals + vals2
+            else
+                local bytes2 = allocatedsize(v)
+                bytes = bytes + bytes2
+                if bytes2 > 0 then
+                    allocs = allocs + 1
+                    seen[v] = true
+                end
+            end
+        end
     end
-    return Vals, Bytes
+    return bytes, allocs, vals - table.getn(t)
+end
+
+function DeepSize(v, seen)
+    if not v then return 0, 0, 0 end
+    local size = allocatedsize(v)
+    if size == 0 then return 8, 0, 1 end
+    if type(v) ~= 'table' then return size, 1, 1 end
+    return DeepSizeTab(v, seen or {})
+end
+
+local function TabProc(t, Seen, Tables)
+    for k,v in t do
+        local Bytes, Allocs, Vals = 0, 0, 0
+        if (type(k) == 'table') and (not Seen[k]) then
+            local Bytes2, Allocs2, Vals2 = DeepSizeTab(k, Seen)
+            Bytes, Allocs, Vals = Bytes + Bytes2, Allocs + Allocs2, Vals + Vals2
+        end
+        if (type(v) == 'table') and (not Seen[v]) then
+            local Bytes2, Allocs2, Vals2 = DeepSizeTab(v, Seen)
+            Bytes, Allocs, Vals = Bytes + Bytes2, Allocs + Allocs2, Vals + Vals2
+        end
+        if Bytes == 0 then continue end
+        Tables[v] = {Bytes = Bytes, Allocs = Allocs, Vals = Vals, Name = tostring(k)}
+    end
+    Seen[t] = nil
+    local Bytes, Allocs, Vals = DeepSizeTab(t, Seen)
+    for _,t in Tables do
+        Bytes = Bytes + t.Bytes
+        Allocs = Allocs + t.Allocs
+        Vals = Vals + t.Vals
+    end
+    return Bytes, Allocs, Vals
 end
 
 local function PrintTables(Tables)
-    WARN('Deep Values - Bytes - Name - Source')
-    local Keys = table.keys(Tables, function(a,b) return Tables[a].Vals > Tables[b].Vals end)
+    WARN('Deep Bytes - Allocs - Values - Name')
+    local Keys = table.keys(Tables, function(a,b) return Tables[a].Bytes > Tables[b].Bytes end)
     for i,k in Keys do
         local Table = Tables[k]
         if i > 1000 then break end
-        WARN(Table.Vals..' - '..Table.Bytes..' - '..Table.Name..' - '..Table.Source)
+        WARN(Table.Bytes..' - '..Table.Allocs..' - '..Table.Vals..' - '..Table.Name)
     end
 end
 
-function TableProfiler(Table)
-    local Tables = {}
-    local BackRefs = {[Table] = true}
-    DeepSize(_G, BackRefs)
-    BackRefs[Table] = nil
-    for k,v in Table do
-        if (type(v) ~= 'table') or (BackRefs[v]) then continue end
-        local Vals, Bytes = DeepSize(v, BackRefs)
-        Tables[v] = {Vals = Vals, Bytes = Bytes, Name = k, Source = ''}
+function TableProfiler(Table, Ignore)
+    local Seen = {[Table] = true}
+    for _,v in Ignore or {} do
+        DeepSize(v, Seen)
     end
+    Seen[Table] = nil
+    local Tables = {}
+    local Bytes, Allocs, Vals = TabProc(Table, Seen, Tables)
+    WARN('Sum - Bytes: '..Bytes..', Allocs: '..Allocs..', Values: '..Vals)
     PrintTables(Tables)
 end
 
 function TablesProfiler()
-    WARN('FAFProfiler: Tables Profiler')
-    WARN('Size _G: '..table.getsize(_G)..', __modules: '..table.getsize(__modules))
+    WARN('FAFProfiler: '..LStateName..' Tables Profiler')
+    WARN('Size _G: '..table.getsize(_G)..', __modules: '..table.getsize(__modules)..', GCInfo: '..gcinfo()..'kb')
+    local Seen = {[_G] = true}
+    for _,m in __modules do
+        Seen[m] = true
+    end
     local Tables = {}
-    local BackRefs = {}
-    for k,v in _G do
-        if (type(v) ~= 'table') or (BackRefs[v]) then continue end
-        local Vals, Bytes = DeepSize(v, BackRefs)
-        Tables[v] = {Vals = Vals, Bytes = Bytes, Name = k, Source = '_G'}
+    local Bytes, Allocs, Vals = TabProc(_G, Seen, Tables)
+    WARN(' ')
+    WARN('Bytes: '..Bytes..', Allocs: '..Allocs..', Values: '..Vals)
+    PrintTables(Tables)
+    local Modules = {}
+    for n,m in __modules do
+        Tables = {}
+        Bytes, Allocs, Vals = TabProc(m, Seen, Tables)
+        table.insert(Modules, {Bytes = Bytes, Allocs = Allocs, Vals = Vals, Tables = Tables, Name = n})
     end
-    local Vals = 0
-    local Bytes = 0
-    for _,t in Tables do
-        Vals = Vals + t.Vals
-        Bytes = Bytes + t.Bytes
+    Bytes, Allocs, Vals = 0, 0, 0
+    for _,m in Modules do
+        Bytes = Bytes + m.Bytes
+        Allocs = Allocs + m.Allocs
+        Vals = Vals + m.Vals
     end
     WARN(' ')
-    WARN('Connectivity: '..table.getsize(Tables)..', Tables: '..table.getsize(BackRefs)..', Sum size: '..Vals..', Sum bytes: '..Bytes)
-    PrintTables(Tables)
-    WARN(' ')
-    Tables = {}
-    BackRefs = {[_G] = true, [__modules] = true}
-    for _,m in __modules do
-        BackRefs[m] = true
-        for k,v in m do
-            if (type(v) ~= 'table') or (Tables[v]) then continue end
-            local Vals, Bytes = DeepSize(v, BackRefs)
-            Tables[v] = {Vals = Vals, Bytes = Bytes, Name = k, Source = m.__moduleinfo.name}
-        end
+    WARN('Modules Bytes: '..Bytes..', Allocs: '..Allocs..', Values: '..Vals)
+    table.sort(Modules, function(a,b) return a.Bytes > b.Bytes end)
+    for i,m in Modules do
+        if i > 200 then break end
+        WARN(' ')
+        WARN(m.Name)
+        WARN('Sum - Bytes: '..m.Bytes..', Allocs: '..m.Allocs..', Values: '..m.Vals)
+        PrintTables(m.Tables)
     end
-    BackRefs[__modules] = nil
-    for _,m in __modules do
-        BackRefs[m] = nil
-    end
-    for k,v in _G do
-        if (type(v) ~= 'table') or (Tables[v]) or (v == _G) then continue end
-        local Vals, Bytes = DeepSize(v, BackRefs)
-        Tables[v] = {Vals = Vals, Bytes = Bytes, Name = k, Source = '_G'}
-    end
-    WARN('Roots: '..table.getsize(Tables))
-    PrintTables(Tables)
 end
 
 local Lines = nil
@@ -373,7 +422,7 @@ function LineProfilerToggle()
         Lines = {}
         Line = nil
         RunTime = GetTimeForProfile(0)
-        WARN(string.format('FAFProfiler: Lines Profiler - Run (RealTime: %0.1f, GameTime: %0.1f)', RunTime - InitTime, GetGameTimeSeconds()))
+        WARN(string.format('FAFProfiler: '..LStateName..' Lines Profiler - Run (RealTime: %0.1f, GameTime: %0.1f)', RunTime - InitTime, GetGameTimeSeconds()))
         debug.sethook(LineHook, 'rl')
     end
 end
