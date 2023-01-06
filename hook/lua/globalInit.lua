@@ -262,8 +262,8 @@ local function DeepSizeTab(t, seen)
                 bytes, allocs, vals = bytes + bytes2, allocs + allocs2, vals + vals2
             else
                 local bytes2 = allocatedsize(k)
-                bytes = bytes + bytes2
                 if bytes2 > 0 then
+                    bytes = bytes + bytes2
                     allocs = allocs + 1
                     seen[k] = true
                 end
@@ -275,8 +275,8 @@ local function DeepSizeTab(t, seen)
                 bytes, allocs, vals = bytes + bytes2, allocs + allocs2, vals + vals2
             else
                 local bytes2 = allocatedsize(v)
-                bytes = bytes + bytes2
                 if bytes2 > 0 then
+                    bytes = bytes + bytes2
                     allocs = allocs + 1
                     seen[v] = true
                 end
