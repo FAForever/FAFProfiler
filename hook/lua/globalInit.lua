@@ -250,40 +250,29 @@ function ThreadProfilerToggle()
     end
 end
 
-local function DeepSizeTab(t, seen)
-    if seen[t] then return 0, 0, 0 end
-    seen[t] = true
-    local bytes, allocs, vals = allocatedsize(t), 1, 0
-    for k, v in t do
-        vals = vals + 2
-        if not seen[k] then
-            if type(k) == 'table' then
-                local bytes2, allocs2, vals2 = DeepSizeTab(k, seen)
-                bytes, allocs, vals = bytes + bytes2, allocs + allocs2, vals + vals2
-            else
-                local bytes2 = allocatedsize(k)
-                if bytes2 > 0 then
-                    bytes = bytes + bytes2
-                    allocs = allocs + 1
-                    seen[k] = true
-                end
-            end
-        end
-        if not seen[v] then
-            if type(v) == 'table' then
-                local bytes2, allocs2, vals2 = DeepSizeTab(v, seen)
-                bytes, allocs, vals = bytes + bytes2, allocs + allocs2, vals + vals2
-            else
-                local bytes2 = allocatedsize(v)
-                if bytes2 > 0 then
-                    bytes = bytes + bytes2
-                    allocs = allocs + 1
-                    seen[v] = true
-                end
-            end
-        end
+local function DeepSizeVal(v, seen)
+    if seen[v] then return 0, 0, 0 end
+    local bytes = allocatedsize(v)
+    if bytes == 0 then return 0, 0, 0 end
+    local allocs, vals = 1, 0
+    seen[v] = true
+    local bytes2, allocs2, vals2
+    local m = getmetatable(v)
+    if m then
+        bytes2, allocs2, vals2 = DeepSizeVal(m, seen)
+        bytes, allocs, vals = bytes + bytes2, allocs + allocs2, vals + vals2
     end
-    return bytes, allocs, vals - table.getn(t)
+    if type(v) == 'table' then
+        for k, v in v do
+            vals = vals + 2
+            bytes2, allocs2, vals2 = DeepSizeVal(k, seen)
+            bytes, allocs, vals = bytes + bytes2, allocs + allocs2, vals + vals2
+            bytes2, allocs2, vals2 = DeepSizeVal(v, seen)
+            bytes, allocs, vals = bytes + bytes2, allocs + allocs2, vals + vals2
+        end
+        vals = vals - table.getn(v)
+    end
+    return bytes, allocs, vals
 end
 
 function DeepSize(v, seen)
@@ -291,25 +280,25 @@ function DeepSize(v, seen)
     local size = allocatedsize(v)
     if size == 0 then return 8, 0, 1 end
     if type(v) ~= 'table' then return size, 1, 1 end
-    return DeepSizeTab(v, seen or {})
+    return DeepSizeVal(v, seen or {})
 end
 
 local function TabProc(t, Seen, Tables)
     for k,v in t do
         local Bytes, Allocs, Vals = 0, 0, 0
         if (type(k) == 'table') and (not Seen[k]) then
-            local Bytes2, Allocs2, Vals2 = DeepSizeTab(k, Seen)
+            local Bytes2, Allocs2, Vals2 = DeepSizeVal(k, Seen)
             Bytes, Allocs, Vals = Bytes + Bytes2, Allocs + Allocs2, Vals + Vals2
         end
         if (type(v) == 'table') and (not Seen[v]) then
-            local Bytes2, Allocs2, Vals2 = DeepSizeTab(v, Seen)
+            local Bytes2, Allocs2, Vals2 = DeepSizeVal(v, Seen)
             Bytes, Allocs, Vals = Bytes + Bytes2, Allocs + Allocs2, Vals + Vals2
         end
         if Bytes == 0 then continue end
         Tables[v] = {Bytes = Bytes, Allocs = Allocs, Vals = Vals, Name = tostring(k)}
     end
     Seen[t] = nil
-    local Bytes, Allocs, Vals = DeepSizeTab(t, Seen)
+    local Bytes, Allocs, Vals = DeepSizeVal(t, Seen)
     for _,t in Tables do
         Bytes = Bytes + t.Bytes
         Allocs = Allocs + t.Allocs
